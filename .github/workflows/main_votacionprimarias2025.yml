@@ -24,7 +24,7 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      # Instala dependencias dentro del paquete (carpeta que Azure reconoce)
+      # Instala dependencias dentro del paquete (Azure las detecta automáticamente)
       - name: Install dependencies into .python_packages
         run: |
           python -m pip install --upgrade pip
