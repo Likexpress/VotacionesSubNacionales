@@ -28,6 +28,34 @@ def limpiar_numero(numero_raw):
     return f"+{numero}"
 
 
+def enviar_mensaje_whatsapp(numero, mensaje):
+    """Envía un mensaje por WhatsApp vía 360dialog."""
+    try:
+        token = os.environ.get("WABA_TOKEN")
+        if not token:
+            print("⚠️ WABA_TOKEN no está configurado.")
+            return False
+
+        resp = requests.post(
+            "https://waba-v2.360dialog.io/messages",
+            headers={
+                "Content-Type": "application/json",
+                "D360-API-KEY": token
+            },
+            json={
+                "messaging_product": "whatsapp",
+                "recipient_type": "individual",
+                "to": numero,
+                "type": "text",
+                "text": {"preview_url": False, "body": mensaje}
+            },
+            timeout=15
+        )
+        print("WhatsApp status:", resp.status_code, resp.text[:200])
+        return 200 <= resp.status_code < 300
+    except Exception as e:
+        print("❌ Error enviando WhatsApp:", str(e))
+        return False
 
 
 
@@ -91,7 +119,11 @@ class NumeroTemporal(db.Model):
 
 
 with app.app_context():
-    db.create_all()
+    try:
+        db.create_all()
+    except Exception as e:
+        print("❌ Error db.create_all():", str(e))
+
 
 # ---------------------------
 # Whatsapp
@@ -183,7 +215,7 @@ def whatsapp_webhook():
             if bloqueo.intentos < 4:
                 advertencia = (
                     "⚠️ Para recibir tu enlace de votación, primero debes registrarte en el portal oficial:\n\n"
-                    "👉 https://bit.ly/bkprimarias\n\n"
+                    "👉 https://https://bit.ly/2davueltabk\n\n"
                     "Asegúrate de ingresar correctamente tu número de WhatsApp durante el registro, "
                     "ya que solo ese número podrá recibir el enlace.\n\n"
                     f"Advertencia {bloqueo.intentos}/3"
