@@ -18,6 +18,113 @@ from itsdangerous import URLSafeTimedSerializer
 import unicodedata
 import re
 
+
+# ---------------------------
+# Loader de Candidatos por Municipio (CSV)
+# ---------------------------
+
+CANDIDATOS_CSV_PATH = os.path.join(os.path.dirname(__file__), "privado", "CandidatosPorMunicipio.csv")
+
+# Cache en memoria para no releer el CSV en cada request
+_CANDIDATOS_CACHE = {
+    "by_id_municipio": {},   # { "123": [ {candidato...}, ... ] }
+    "id_by_municipio": {},   # { "TARVITA": ["10","11"] }  (ojo: puede haber duplicados)
+    "loaded": False,
+    "error": None
+}
+
+
+def _norm_text(s: str) -> str:
+    if s is None:
+        return ""
+    s = str(s).strip()
+    s = unicodedata.normalize("NFKD", s)
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    s = s.upper()
+    s = re.sub(r"\s+", " ", s)
+    return s
+
+
+def cargar_candidatos_desde_csv():
+    """
+    Lee privado/CandidatosPorMunicipio.csv y construye:
+    - by_id_municipio: lista de candidatos por id_municipio
+    - id_by_municipio: posible lista de ids por nombre de municipio (si hay nombres repetidos)
+    """
+    global _CANDIDATOS_CACHE
+
+    _CANDIDATOS_CACHE["by_id_municipio"] = {}
+    _CANDIDATOS_CACHE["id_by_municipio"] = {}
+    _CANDIDATOS_CACHE["loaded"] = False
+    _CANDIDATOS_CACHE["error"] = None
+
+    if not os.path.exists(CANDIDATOS_CSV_PATH):
+        _CANDIDATOS_CACHE["error"] = f"No existe el archivo: {CANDIDATOS_CSV_PATH}"
+        return
+
+    try:
+        with open(CANDIDATOS_CSV_PATH, encoding="utf-8") as f:
+            lector = csv.DictReader(f)
+
+            required = {
+                "id_municipio",
+                "municipio",
+                "id_nombre_completo",
+                "nombre_completo",
+                "id_organizacion_politica",
+                "organizacion_politica",
+                "id_cargo",
+                "cargo",
+            }
+            headers = set(lector.fieldnames or [])
+            faltantes = required - headers
+            if faltantes:
+                _CANDIDATOS_CACHE["error"] = f"Faltan columnas en CSV: {sorted(list(faltantes))}"
+                return
+
+            for row in lector:
+                id_mun = str(row.get("id_municipio") or "").strip()
+                mun = _norm_text(row.get("municipio"))
+
+                if not id_mun or not mun:
+                    continue
+
+                item = {
+                    "id_municipio": id_mun,
+                    "municipio": mun,
+                    "id_nombre_completo": str(row.get("id_nombre_completo") or "").strip(),
+                    "nombre_completo": (row.get("nombre_completo") or "").strip(),
+                    "id_organizacion_politica": str(row.get("id_organizacion_politica") or "").strip(),
+                    "organizacion_politica": (row.get("organizacion_politica") or "").strip(),
+                    "id_cargo": str(row.get("id_cargo") or "").strip(),
+                    "cargo": (row.get("cargo") or "").strip(),
+                }
+
+                _CANDIDATOS_CACHE["by_id_municipio"].setdefault(id_mun, []).append(item)
+
+                # Para resolver desde nombre (si hiciera falta)
+                _CANDIDATOS_CACHE["id_by_municipio"].setdefault(mun, [])
+                if id_mun not in _CANDIDATOS_CACHE["id_by_municipio"][mun]:
+                    _CANDIDATOS_CACHE["id_by_municipio"][mun].append(id_mun)
+
+        _CANDIDATOS_CACHE["loaded"] = True
+
+    except Exception as e:
+        _CANDIDATOS_CACHE["error"] = f"Error leyendo CandidatosPorMunicipio.csv: {str(e)}"
+
+
+def asegurar_candidatos_cargados():
+    """Carga el CSV una sola vez (cache)."""
+    if not _CANDIDATOS_CACHE["loaded"] and _CANDIDATOS_CACHE["error"] is None:
+        cargar_candidatos_desde_csv()
+
+
+# Cargar al iniciar (si falla, quedará error en cache y lo veremos por logs)
+asegurar_candidatos_cargados()
+
+
+
+
 def limpiar_numero(numero_raw):
     """Normaliza el número eliminando espacios, símbolos invisibles y caracteres no numéricos."""
     # Elimina símbolos Unicode raros y normaliza el texto
@@ -28,11 +135,39 @@ def limpiar_numero(numero_raw):
     return f"+{numero}"
 
 
+def enviar_mensaje_whatsapp(numero, mensaje):
+    """Envía un mensaje por WhatsApp vía 360dialog."""
+    try:
+        token = os.environ.get("WABA_TOKEN")
+        if not token:
+            print("⚠️ WABA_TOKEN no está configurado.")
+            return False
+
+        resp = requests.post(
+            "https://waba-v2.360dialog.io/messages",
+            headers={
+                "Content-Type": "application/json",
+                "D360-API-KEY": token
+            },
+            json={
+                "messaging_product": "whatsapp",
+                "recipient_type": "individual",
+                "to": numero,
+                "type": "text",
+                "text": {"preview_url": False, "body": mensaje}
+            },
+            timeout=15
+        )
+        print("WhatsApp status:", resp.status_code, resp.text[:200])
+        return 200 <= resp.status_code < 300
+    except Exception as e:
+        print("❌ Error enviando WhatsApp:", str(e))
+        return False
 
 
 
 # ---------------------------
-# Configuración inicial Hasta aqu sirve 12344
+# Configuración inicial Hasta aqu sirve 1
 # ---------------------------
 load_dotenv()
 
@@ -91,7 +226,11 @@ class NumeroTemporal(db.Model):
 
 
 with app.app_context():
-    db.create_all()
+    try:
+        db.create_all()
+    except Exception as e:
+        print("❌ Error db.create_all():", str(e))
+
 
 # ---------------------------
 # Whatsapp
@@ -183,7 +322,7 @@ def whatsapp_webhook():
             if bloqueo.intentos < 4:
                 advertencia = (
                     "⚠️ Para recibir tu enlace de votación, primero debes registrarte en el portal oficial:\n\n"
-                    "👉 https://bit.ly/bkprimarias\n\n"
+                    "👉 https://https://bit.ly/2davueltabk\n\n"
                     "Asegúrate de ingresar correctamente tu número de WhatsApp durante el registro, "
                     "ya que solo ese número podrá recibir el enlace.\n\n"
                     f"Advertencia {bloqueo.intentos}/3"
@@ -362,7 +501,7 @@ def votar():
 
     try:
   
-        data = serializer.loads(token, max_age=86400000)  
+        data = serializer.loads(token, max_age=600)  
         numero = limpiar_numero(data.get("numero"))
 
 
