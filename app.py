@@ -232,7 +232,9 @@ class NumeroTemporal(db.Model):
     numero = db.Column(db.String(50), unique=True, nullable=False)
     token = db.Column(db.Text, nullable=True)  # <--- Este campo debe existir
     fecha = db.Column(db.DateTime, default=datetime.utcnow)
-
+# ---------------------------
+# Bloqueo WHatsapp
+# ---------------------------
 class BloqueoWhatsapp(db.Model):
     __tablename__ = "bloqueo_whatsapp"
     id = db.Column(db.Integer, primary_key=True)
@@ -423,23 +425,6 @@ def whatsapp_webhook():
         print("❌ Error procesando webhook:", str(e))
 
     return "ok", 200
-
-
-
-
-
-
-# ---------------------------
-# Bloqueo WHatsapp
-# ---------------------------
-
-class BloqueoWhatsapp(db.Model):
-    __tablename__ = "bloqueo_whatsapp"
-    id = db.Column(db.Integer, primary_key=True)
-    numero = db.Column(db.String(50), unique=True, nullable=False)
-    intentos = db.Column(db.Integer, default=0)
-    bloqueado = db.Column(db.Boolean, default=False)
-
 
 
 # ---------------------------
@@ -667,9 +652,9 @@ def api_recintos():
 
     # OJO: a veces el Referer viene vacío por privacidad del navegador.
     # Si te da 403, más abajo te digo cómo ajustarlo.
-    if dominio_esperado not in referer:
-        print(f"Acceso denegado a /api/recintos desde Referer: {referer}")
+    if referer and (dominio_esperado not in referer):
         return "Acceso no autorizado", 403
+
 
     archivo = os.path.join(os.path.dirname(__file__), "privado", "RecintosParaPrimaria.csv")
     datos = []
