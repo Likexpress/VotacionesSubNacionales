@@ -63,7 +63,7 @@ def cargar_candidatos_desde_csv():
         return
 
     try:
-        with open(CANDIDATOS_CSV_PATH, encoding="utf-8") as f:
+        with open(CANDIDATOS_CSV_PATH, encoding="utf-8-sig") as f:
             lector = csv.DictReader(f)
 
             required = {
@@ -120,7 +120,7 @@ def asegurar_candidatos_cargados():
 
 
 # Cargar al iniciar (si falla, quedará error en cache y lo veremos por logs)
-asegurar_candidatos_cargados()
+
 
 
 
@@ -167,7 +167,7 @@ def enviar_mensaje_whatsapp(numero, mensaje):
 
 
 # ---------------------------
-# Configuración inicial Hasta aqu sirve 1
+# Configuración inicial
 # ---------------------------
 load_dotenv()
 
@@ -175,19 +175,28 @@ SECRET_KEY = os.environ.get("SECRET_KEY", "clave-super-secreta")
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
 
-csrf = CSRFProtect(app)  # ✅ Protección CSRF
-serializer = URLSafeTimedSerializer(SECRET_KEY)  # ✅ Crear serializer después de definir la clave
-
-
+csrf = CSRFProtect(app)
+serializer = URLSafeTimedSerializer(SECRET_KEY)
 
 # ---------------------------
 # Configuración de la base de datos
 # ---------------------------
 db_url = os.environ.get("DATABASE_URL", "sqlite:///votos.db")
-app.config['SQLALCHEMY_DATABASE_URI'] = db_url
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config["SQLALCHEMY_DATABASE_URI"] = db_url
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
+
+# ---------------------------
+# Cargar candidatos (1 sola vez)
+# ---------------------------
+asegurar_candidatos_cargados()
+print("✅ CANDIDATOS loaded:", _CANDIDATOS_CACHE["loaded"])
+print("⚠️ CANDIDATOS error:", _CANDIDATOS_CACHE["error"])
+print("📌 CANDIDATOS path:", CANDIDATOS_CSV_PATH)
+
+
 
 # ---------------------------
 # Modelos
@@ -224,12 +233,21 @@ class NumeroTemporal(db.Model):
     token = db.Column(db.Text, nullable=True)  # <--- Este campo debe existir
     fecha = db.Column(db.DateTime, default=datetime.utcnow)
 
+class BloqueoWhatsapp(db.Model):
+    __tablename__ = "bloqueo_whatsapp"
+    id = db.Column(db.Integer, primary_key=True)
+    numero = db.Column(db.String(50), unique=True, nullable=False)
+    intentos = db.Column(db.Integer, default=0)
+    bloqueado = db.Column(db.Boolean, default=False)
 
 with app.app_context():
     try:
         db.create_all()
     except Exception as e:
         print("❌ Error db.create_all():", str(e))
+
+
+        
 
 
 # ---------------------------
@@ -642,35 +660,102 @@ def enviar_voto():
 def api_recintos():
     # Validación del dominio de origen (protección básica)
     referer = request.headers.get("Referer", "")
-    dominio_esperado = os.environ.get("AZURE_DOMAIN", "votacionprimarias2025-g7ebaphpgrcucgbr.brazilsouth-01.azurewebsites.net")
-    
+    dominio_esperado = os.environ.get(
+        "AZURE_DOMAIN",
+        "votacionprimarias2025-g7ebaphpgrcucgbr.brazilsouth-01.azurewebsites.net"
+    )
+
+    # OJO: a veces el Referer viene vacío por privacidad del navegador.
+    # Si te da 403, más abajo te digo cómo ajustarlo.
     if dominio_esperado not in referer:
-        print(f"❌ Acceso denegado a /api/recintos desde Referer: {referer}")
+        print(f"Acceso denegado a /api/recintos desde Referer: {referer}")
         return "Acceso no autorizado", 403
 
-    # Ruta protegida al archivo
     archivo = os.path.join(os.path.dirname(__file__), "privado", "RecintosParaPrimaria.csv")
     datos = []
-    
+
     try:
-        with open(archivo, encoding='utf-8') as f:
+        with open(archivo, encoding="utf-8-sig") as f:
             lector = csv.DictReader(f)
+
+            required = {
+                "id_pais", "nombre_pais",
+                "id_departamento", "nombre_departamento",
+                "id_provincia", "nombre_provincia",
+                "id_municipio", "nombre_municipio",
+                "id_recinto", "nombre_recinto",
+            }
+            headers = set(lector.fieldnames or [])
+            faltantes = required - headers
+            if faltantes:
+                print("Faltan columnas en RecintosParaPrimaria.csv:", faltantes)
+                return "CSV de recintos con columnas incompletas.", 500
+
             for fila in lector:
                 datos.append({
-                    "nombre_pais": fila["nombre_pais"],
-                    "nombre_departamento": fila["nombre_departamento"],
-                    "nombre_provincia": fila["nombre_provincia"],
-                    "nombre_municipio": fila["nombre_municipio"],
-                    "nombre_recinto": fila["nombre_recinto"]
+                    "id_pais": str(fila.get("id_pais") or "").strip(),
+                    "nombre_pais": (fila.get("nombre_pais") or "").strip(),
+
+                    "id_departamento": str(fila.get("id_departamento") or "").strip(),
+                    "nombre_departamento": (fila.get("nombre_departamento") or "").strip(),
+
+                    "id_provincia": str(fila.get("id_provincia") or "").strip(),
+                    "nombre_provincia": (fila.get("nombre_provincia") or "").strip(),
+
+                    # CLAVE PARA EL PASO 3/4:
+                    "id_municipio": str(fila.get("id_municipio") or "").strip(),
+                    "nombre_municipio": (fila.get("nombre_municipio") or "").strip(),
+
+                    "id_recinto": str(fila.get("id_recinto") or "").strip(),
+                    "nombre_recinto": (fila.get("nombre_recinto") or "").strip(),
+
+                    # extras opcionales (si existen)
+                    "direccion": (fila.get("Direccion") or "").strip(),
+                    "latitud": (fila.get("latitud") or "").strip(),
+                    "longitud": (fila.get("longitud") or "").strip(),
                 })
+
         return jsonify(datos)
+
     except FileNotFoundError:
-        print("❌ Archivo RecintosParaPrimaria.csv no encontrado.")
+        print("Archivo RecintosParaPrimaria.csv no encontrado en privado/.")
         return "Archivo de recintos no disponible.", 500
     except Exception as e:
-        print(f"❌ Error al leer CSV: {str(e)}")
+        print(f"Error al leer CSV recintos: {str(e)}")
         return "Error procesando los datos.", 500
 
+
+@app.route("/api/candidatos")
+def api_candidatos():
+    # Validación de dominio (igual que /api/recintos)
+    referer = request.headers.get("Referer", "")
+    dominio_esperado = os.environ.get(
+        "AZURE_DOMAIN",
+        "votacionprimarias2025-g7ebaphpgrcucgbr.brazilsouth-01.azurewebsites.net"
+    )
+
+    if dominio_esperado not in referer:
+        print(f"❌ Acceso denegado a /api/candidatos desde Referer: {referer}")
+        return "Acceso no autorizado", 403
+
+    asegurar_candidatos_cargados()
+    if _CANDIDATOS_CACHE["error"]:
+        print("❌ Error candidatos CSV:", _CANDIDATOS_CACHE["error"])
+        return jsonify({"error": _CANDIDATOS_CACHE["error"]}), 500
+
+    id_municipio = (request.args.get("id_municipio") or "").strip()
+    if not id_municipio:
+        return jsonify([])
+
+    candidatos = _CANDIDATOS_CACHE["by_id_municipio"].get(id_municipio, [])
+
+    # Filtrar solo cargo Alcalde (por si el CSV trae otros cargos)
+    out = [c for c in candidatos if (c.get("cargo") or "").strip().lower() == "alcalde"]
+
+    # Opcional: ordenar por nombre
+    out.sort(key=lambda x: (x.get("nombre_completo") or "").lower())
+
+    return jsonify(out)
 
 # ---------------------------
 # Página de preguntas frecuentes
