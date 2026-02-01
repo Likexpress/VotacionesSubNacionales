@@ -734,9 +734,11 @@ def api_candidatos():
         "votacionprimarias2025-g7ebaphpgrcucgbr.brazilsouth-01.azurewebsites.net"
     )
 
-    if dominio_esperado not in referer:
-        print(f"❌ Acceso denegado a /api/candidatos desde Referer: {referer}")
+    # Si no hay referer, no bloquees (muchos navegadores lo omiten)
+    if referer and (dominio_esperado not in referer):
+        print(f"Acceso denegado a /api/candidatos desde Referer: {referer}")
         return "Acceso no autorizado", 403
+
 
     asegurar_candidatos_cargados()
     if _CANDIDATOS_CACHE["error"]:
