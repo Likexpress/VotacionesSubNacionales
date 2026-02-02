@@ -17,8 +17,6 @@ from datetime import datetime, timedelta
 from itsdangerous import URLSafeTimedSerializer
 import unicodedata
 import re
-import pandas as pd
-from flask import request, jsonify
 
 
 
@@ -305,15 +303,7 @@ def whatsapp_webhook():
 
         # Tomamos el primer mensaje
         msg = messages[0] or {}
-
-        # 1) Número del remitente (primero, para poder guardarlo)
-        numero_raw = msg.get('from') or msg.get('wa_id') or ""
-        numero_completo = limpiar_numero(numero_raw)
-
-        # 2) ID del mensaje
         message_id = (msg.get("id") or "").strip()
-
-        # 3) Control de duplicados + guardado
         if message_id:
             ya = WhatsappMensajeProcesado.query.filter_by(message_id=message_id).first()
             if ya:
@@ -326,6 +316,10 @@ def whatsapp_webhook():
             ))
             db.session.commit()
 
+
+        # Número del remitente (MSISDN, a veces sin '+')
+        numero_raw = msg.get('from') or msg.get('wa_id') or ""
+        numero_completo = limpiar_numero(numero_raw)
 
         # Texto del mensaje (puede venir en diferentes campos)
         texto = ""
@@ -768,78 +762,37 @@ def api_recintos():
 
 @app.route("/api/candidatos")
 def api_candidatos():
-    id_municipio = (request.args.get("id_municipio") or "").strip()
-    dep_sel = request.args.get("departamento") or ""
-    prov_sel = request.args.get("provincia") or ""
+    # Validación de dominio (igual que /api/recintos)
+    referer = request.headers.get("Referer", "")
+    dominio_esperado = os.environ.get(
+        "AZURE_DOMAIN",
+        "votacionprimarias2025-g7ebaphpgrcucgbr.brazilsouth-01.azurewebsites.net"
+    )
 
+    # Si no hay referer, no bloquees (muchos navegadores lo omiten)
+    if referer and (dominio_esperado not in referer):
+        print(f"Acceso denegado a /api/candidatos desde Referer: {referer}")
+        return "Acceso no autorizado", 403
+
+
+    asegurar_candidatos_cargados()
+    if _CANDIDATOS_CACHE["error"]:
+        print("❌ Error candidatos CSV:", _CANDIDATOS_CACHE["error"])
+        return jsonify({"error": _CANDIDATOS_CACHE["error"]}), 500
+
+    id_municipio = (request.args.get("id_municipio") or "").strip()
     if not id_municipio:
         return jsonify([])
 
-    # Normalizamos lo que vino del frontend
-    dep_sel_n = _norm_text(dep_sel)
-    prov_sel_n = _norm_text(prov_sel)
+    candidatos = _CANDIDATOS_CACHE["by_id_municipio"].get(id_municipio, [])
 
-    # 1) Buscar el municipio REAL en RecintosParaPrimaria.csv
-    archivo_recintos = os.path.join(os.path.dirname(__file__), "privado", "RecintosParaPrimaria.csv")
+    # Filtrar solo cargo Alcalde (por si el CSV trae otros cargos)
+    out = [c for c in candidatos if (c.get("cargo") or "").strip().lower() == "alcalde"]
 
-    dep_real = ""
-    prov_real = ""
-    mun_real = ""
+    # Opcional: ordenar por nombre
+    out.sort(key=lambda x: (x.get("nombre_completo") or "").lower())
 
-    try:
-        with open(archivo_recintos, encoding="utf-8-sig", newline="") as f:
-            reader = csv.DictReader(f)
-            for fila in reader:
-                # normalizamos datos del CSV
-                idm = (fila.get("id_municipio") or "").strip()
-                dep = _norm_text(fila.get("nombre_departamento"))
-                prov = _norm_text(fila.get("nombre_provincia"))
-                mun = _norm_text(fila.get("nombre_municipio"))
-
-                # coincidencia fuerte: id_municipio + dep + prov
-                if idm == id_municipio and dep == dep_sel_n and prov == prov_sel_n:
-                    dep_real = dep
-                    prov_real = prov
-                    mun_real = mun
-                    break
-
-    except Exception as e:
-        print("❌ Error leyendo RecintosParaPrimaria.csv:", str(e))
-        return jsonify([])
-
-    # Si no encontramos combinación exacta, devolvemos vacío (mejor que dar mal)
-    if not mun_real:
-        print("⚠️ No se encontró municipio con esa combinación:", id_municipio, dep_sel, prov_sel)
-        return jsonify([])
-
-    # 2) Buscar candidatos por dep + prov + mun en CandidatosPorMunicipio.csv
-    archivo_candidatos = os.path.join(os.path.dirname(__file__), "privado", "CandidatosPorMunicipio.csv")
-    candidatos = []
-
-    try:
-        with open(archivo_candidatos, encoding="utf-8-sig", newline="") as f:
-            reader = csv.DictReader(f)
-            for fila in reader:
-                dep_c = _norm_text(fila.get("departamento"))
-                prov_c = _norm_text(fila.get("provincia"))
-                mun_c = _norm_text(fila.get("municipio"))
-                cargo_c = _norm_text(fila.get("cargo"))
-
-                if dep_c == dep_real and prov_c == prov_real and mun_c == mun_real and cargo_c == "ALCALDE":
-                    candidatos.append({
-                        "id_nombre_completo": (fila.get("id_nombre_completo") or "").strip(),
-                        "nombre_completo": (fila.get("nombre_completo") or "").strip(),
-                        "organizacion_politica": (fila.get("organizacion_politica") or "").strip(),
-                        "id_organizacion_politica": (fila.get("id_organizacion_politica") or "").strip(),
-                        "id_cargo": (fila.get("id_cargo") or "").strip(),
-                        "cargo": (fila.get("cargo") or "").strip()
-                    })
-
-    except Exception as e:
-        print("❌ Error leyendo CandidatosPorMunicipio.csv:", str(e))
-        return jsonify([])
-
-    return jsonify(candidatos)
+    return jsonify(out)
 
 # ---------------------------
 # Página de preguntas frecuentes
