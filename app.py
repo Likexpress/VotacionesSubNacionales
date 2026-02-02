@@ -208,6 +208,7 @@ class Voto(db.Model):
     pais = db.Column(db.String(100), nullable=False)
     departamento = db.Column(db.String(100), nullable=False)
     provincia = db.Column(db.String(100), nullable=False)
+    id_municipio = db.Column(db.String(20), nullable=True)
     municipio = db.Column(db.String(100), nullable=False)
     recinto = db.Column(db.String(100), nullable=False)
     dia_nacimiento = db.Column(db.Integer, nullable=False)
@@ -237,10 +238,13 @@ class NumeroTemporal(db.Model):
 # ---------------------------
 class BloqueoWhatsapp(db.Model):
     __tablename__ = "bloqueo_whatsapp"
+
     id = db.Column(db.Integer, primary_key=True)
     numero = db.Column(db.String(50), unique=True, nullable=False)
     intentos = db.Column(db.Integer, default=0)
     bloqueado = db.Column(db.Boolean, default=False)
+
+
 
 with app.app_context():
     try:
@@ -548,8 +552,9 @@ def enviar_voto():
     referer = request.headers.get("Referer", "")
     dominio_permitido = os.environ.get("AZURE_DOMAIN", "votacionprimarias2025-g7ebaphpgrcucgbr.brazilsouth-01.azurewebsites.net")
 
-    if dominio_permitido not in referer:
+    if referer and (dominio_permitido not in referer):
         return "Acceso no autorizado (referer inválido).", 403
+
 
     numero = session.get("numero_token")  # ← ✅ fuera del if
     if not numero:
@@ -565,7 +570,8 @@ def enviar_voto():
     pais = request.form.get('pais')
     departamento = request.form.get('departamento')
     provincia = request.form.get('provincia')
-    municipio = request.form.get('municipio')
+    id_municipio = request.form.get('id_municipio')
+    municipio = request.form.get('municipio_nombre')
     recinto = request.form.get('recinto')
     dia = request.form.get('dia_nacimiento')
     mes = request.form.get('mes_nacimiento')
@@ -579,9 +585,10 @@ def enviar_voto():
     ip = request.headers.get('X-Forwarded-For', request.remote_addr).split(',')[0].strip()
 
 
-    if not all([genero, pais, departamento, provincia, municipio, recinto,
+    if not all([genero, pais, departamento, provincia, municipio, id_municipio, recinto,
                 dia, mes, anio, candidato, pregunta3]):
         return render_template("faltan_campos.html")
+
 
 
     if pregunta3 == "Sí" and not ci:
@@ -602,7 +609,8 @@ def enviar_voto():
         pais=pais,
         departamento=departamento,
         provincia=provincia,
-        municipio=municipio,
+        id_municipio=id_municipio,
+        municipio=municipio,        # nombre
         recinto=recinto,
         dia_nacimiento=int(dia),
         mes_nacimiento=int(mes),
@@ -610,10 +618,10 @@ def enviar_voto():
         latitud=float(latitud) if latitud else None,
         longitud=float(longitud) if longitud else None,
         ip=ip,
-        
         candidato=candidato,
         pregunta3=pregunta3,
         ci=ci
+        
     )
 
     db.session.add(nuevo_voto)
