@@ -210,6 +210,25 @@
 <script>
   let recintosData = [];
 
+  function resetSelect2(selector, texto) {
+  const $el = $(selector);
+
+  // Si Select2 está activo, lo apagamos
+  if ($el.hasClass('select2-hidden-accessible')) {
+    $el.select2('destroy');
+  }
+
+  // Borramos opciones y ponemos 1 opción por defecto
+  $el.empty().append(new Option(texto, ''));
+
+  // Encendemos Select2 de nuevo
+  $el.select2({ width: '100%' });
+
+  // Dejamos el valor vacío
+  $el.val('').trigger('change');
+}
+
+
   async function cargarDatos() {
     const res = await fetch("/api/recintos");
     recintosData = await res.json();
@@ -257,36 +276,53 @@
     $prov.trigger('change');
   }
 
-  function actualizarMunicipios() {
-    const pais = $('#pais').val();
-    const departamento = $('#departamento').val();
-    const provincia = $('#provincia').val();
+function actualizarMunicipios() {
+  const pais = $('#pais').val();
+  const departamento = $('#departamento').val();
+  const provincia = $('#provincia').val();
 
-    const filas = recintosData.filter(r =>
-      r.nombre_pais === pais &&
-      r.nombre_departamento === departamento &&
-      r.nombre_provincia === provincia
-    );
+  const filas = recintosData.filter(r =>
+    r.nombre_pais === pais &&
+    r.nombre_departamento === departamento &&
+    r.nombre_provincia === provincia
+  );
 
-    // id_municipio -> nombre_municipio (únicos)
-    const mapa = new Map();
-    filas.forEach(r => {
-      if (r.id_municipio && r.nombre_municipio && !mapa.has(String(r.id_municipio))) {
-        mapa.set(String(r.id_municipio), r.nombre_municipio);
-      }
-    });
-
-    const $mun = $('#municipio');
-    $mun.empty().append(new Option('Selecciona municipio', ''));
-
-    for (const [id, nombre] of mapa.entries()) {
-      $mun.append(new Option(nombre, id)); // VALUE = id_municipio
+  // Creamos lista única de municipios (id -> nombre)
+  const mapa = new Map();
+  filas.forEach(r => {
+    const id = String(r.id_municipio || '');
+    const nombre = r.nombre_municipio;
+    if (id && nombre && !mapa.has(id)) {
+      mapa.set(id, nombre);
     }
+  });
 
-    $mun.trigger('change');
-    setMunicipioNombreHidden();
+  const $mun = $('#municipio');
 
+  // 1) Apagar Select2 del municipio (para que no se quede pegado)
+  if ($mun.hasClass('select2-hidden-accessible')) {
+    $mun.select2('destroy');
   }
+
+  // 2) Vaciar y cargar municipios nuevos
+  $mun.empty().append(new Option('Selecciona municipio', ''));
+  for (const [id, nombre] of mapa.entries()) {
+    $mun.append(new Option(nombre, id));
+  }
+
+  // 3) Encender Select2 de nuevo
+  $mun.select2({ width: '100%' });
+
+  // 4) Forzar valor vacío
+  $mun.val('').trigger('change');
+
+  // 5) Resetear recintos y candidatos (porque dependen del municipio)
+  resetSelect2('#recinto', 'Selecciona recinto');
+  resetSelect2('#candidato', 'Selecciona un municipio primero');
+
+  setMunicipioNombreHidden();
+}
+
   function setMunicipioNombreHidden() {
     const select = document.getElementById('municipio');
     const hidden = document.getElementById('municipio_nombre');
@@ -302,6 +338,8 @@
     const departamento = $('#departamento').val();
     const provincia = $('#provincia').val();
     const id_municipio = $('#municipio').val();
+    console.log("ID municipio enviado a /api/candidatos:", id_municipio);
+
 
     const recintos = [...new Set(
       recintosData
@@ -392,6 +430,8 @@ async function cargarCandidatosPorMunicipio() {
     $('#provincia').select2();
     $('#municipio').select2();
     $('#recinto').select2();
+    $('#candidato').select2({ width: '100%' });
+
 
 
     // Eventos encadenados
@@ -399,11 +439,12 @@ async function cargarCandidatosPorMunicipio() {
     $('#departamento').on('change', actualizarProvincias);
     $('#provincia').on('change', actualizarMunicipios);
 
-    $('#municipio').on('change', () => {
+    $('#municipio').on('change select2:select', () => {
       setMunicipioNombreHidden();
       actualizarRecintos();
       cargarCandidatosPorMunicipio();
     });
+
 
 
 
