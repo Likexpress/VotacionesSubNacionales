@@ -380,7 +380,11 @@ async function cargarCandidatosPorMunicipio() {
 
   try {
     // 3) Pedimos a tu backend los candidatos del municipio
-    const url = `/api/candidatos?id_municipio=${encodeURIComponent(id_municipio)}`;
+    const dep = $('#departamento').val();
+    const prov = $('#provincia').val();
+
+    const url = `/api/candidatos?id_municipio=${encodeURIComponent(id_municipio)}&departamento=${encodeURIComponent(dep)}&provincia=${encodeURIComponent(prov)}`;
+
     const res = await fetch(url, { cache: "no-store" }); // evita cache del navegador
     const data = await res.json();
 
