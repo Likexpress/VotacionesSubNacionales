@@ -385,12 +385,23 @@ def whatsapp_webhook():
             return "ok", 200
 
         # Dominios coherentes
-        AZURE_DOMAIN = os.environ.get(
-            "AZURE_DOMAIN",
-            request.host_url.rstrip('/')
-        ).rstrip('/')
+# ====== Ya autorizado: generar token NUEVO y enviar enlace ======
+        AZURE_DOMAIN = os.environ.get("AZURE_DOMAIN", request.host_url.rstrip('/')).rstrip('/')
 
-        link = f"{AZURE_DOMAIN}/votar?token={autorizado.token}"
+        token_data = {
+            "numero": numero_completo,
+            "dominio": AZURE_DOMAIN
+        }
+        token_nuevo = serializer.dumps(token_data)
+
+        # Guardar el token nuevo (reemplaza el viejo)
+        autorizado.token = token_nuevo
+        autorizado.fecha = datetime.utcnow()
+        db.session.commit()
+
+        link = f"{AZURE_DOMAIN}/votar?token={token_nuevo}"
+        print(f"🔗 Enlace nuevo generado: {link}")
+
         print(f"🔗 Enlace recuperado: {link}")
 
         mensaje = (
@@ -477,17 +488,20 @@ def generar_link():
         token = serializer.dumps(token_data)
 
 
+
         # Verificar si ya está registrado
         temporal = NumeroTemporal.query.filter_by(numero=numero_completo).first()
+
         if not temporal:
             temporal = NumeroTemporal(numero=numero_completo, token=token)
             db.session.add(temporal)
-            db.session.commit()
         else:
-            token = temporal.token  # ✅ Reutilizar el token existente
-
+            # IMPORTANTE: reemplazar el token viejo por uno nuevo
+            temporal.token = token
+            temporal.fecha = datetime.utcnow()
 
         db.session.commit()
+
 
         # Redireccionar al WhatsApp con el mensaje prellenado
         return redirect("https://wa.me/59172902813?text=Hola,%20deseo%20participar%20en%20este%20proceso%20democrático%20porque%20creo%20en%20el%20cambio.%20Quiero%20ejercer%20mi%20derecho%20a%20votar%20de%20manera%20libre%20y%20responsable%20por%20el%20futuro%20de%20Bolivia.")
