@@ -17,8 +17,6 @@ from datetime import datetime, timedelta
 from itsdangerous import URLSafeTimedSerializer
 import unicodedata
 import re
-import pandas as pd
-from flask import request, jsonify
 
 
 
@@ -764,64 +762,37 @@ def api_recintos():
 
 @app.route("/api/candidatos")
 def api_candidatos():
-    id_municipio = request.args.get("id_municipio")
+    # Validación de dominio (igual que /api/recintos)
+    referer = request.headers.get("Referer", "")
+    dominio_esperado = os.environ.get(
+        "AZURE_DOMAIN",
+        "votacionprimarias2025-g7ebaphpgrcucgbr.brazilsouth-01.azurewebsites.net"
+    )
 
+    # Si no hay referer, no bloquees (muchos navegadores lo omiten)
+    if referer and (dominio_esperado not in referer):
+        print(f"Acceso denegado a /api/candidatos desde Referer: {referer}")
+        return "Acceso no autorizado", 403
+
+
+    asegurar_candidatos_cargados()
+    if _CANDIDATOS_CACHE["error"]:
+        print("❌ Error candidatos CSV:", _CANDIDATOS_CACHE["error"])
+        return jsonify({"error": _CANDIDATOS_CACHE["error"]}), 500
+
+    id_municipio = (request.args.get("id_municipio") or "").strip()
     if not id_municipio:
         return jsonify([])
 
-    # 1️⃣ BUSCAR el municipio real en RecintosParaPrimaria.csv
-    archivo_recintos = os.path.join(
-        os.path.dirname(__file__),
-        "privado",
-        "RecintosParaPrimaria.csv"
-    )
+    candidatos = _CANDIDATOS_CACHE["by_id_municipio"].get(id_municipio, [])
 
-    departamento = None
-    provincia = None
-    municipio = None
+    # Filtrar solo cargo Alcalde (por si el CSV trae otros cargos)
+    out = [c for c in candidatos if (c.get("cargo") or "").strip().lower() == "alcalde"]
 
-    with open(archivo_recintos, encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for fila in reader:
-            if fila["id_municipio"] == id_municipio:
-                departamento = fila["nombre_departamento"].strip().lower()
-                provincia = fila["nombre_provincia"].strip().lower()
-                municipio = fila["nombre_municipio"].strip().lower()
-                break
+    # Opcional: ordenar por nombre
+    out.sort(key=lambda x: (x.get("nombre_completo") or "").lower())
 
-    # Si no se encontró el municipio
-    if not municipio:
-        return jsonify([])
-
-    # 2️⃣ BUSCAR candidatos por departamento + provincia + municipio
-    archivo_candidatos = os.path.join(
-        os.path.dirname(__file__),
-        "privado",
-        "CandidatosPorMunicipio.csv"
-    )
-
-    candidatos = []
-
-    with open(archivo_candidatos, encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for fila in reader:
-            if (
-                fila["departamento"].strip().lower() == departamento and
-                fila["provincia"].strip().lower() == provincia and
-                fila["municipio"].strip().lower() == municipio and
-                fila["cargo"].strip().lower() == "alcalde"
-            ):
-                candidatos.append({
-                    "id_nombre_completo": fila["id_nombre_completo"],
-                    "nombre_completo": fila["nombre_completo"],
-                    "organizacion_politica": fila["organizacion_politica"],
-                    "id_organizacion_politica": fila["id_organizacion_politica"],
-                    "id_cargo": fila["id_cargo"],
-                    "cargo": fila["cargo"]
-                })
-
-    return jsonify(candidatos)
-
+    return jsonify(out)
 
 # ---------------------------
 # Página de preguntas frecuentes
