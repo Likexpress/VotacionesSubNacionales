@@ -23,7 +23,7 @@ from flask import request, jsonify
 
 
 # ---------------------------
-# Loader de Candidatos por Municipio (CSV)
+# Loader de Candidatos por Municipio (CSV) 1
 # ---------------------------
 
 CANDIDATOS_CSV_PATH = os.path.join(os.path.dirname(__file__), "privado", "CandidatosPorMunicipio.csv")
