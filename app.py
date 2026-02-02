@@ -305,7 +305,15 @@ def whatsapp_webhook():
 
         # Tomamos el primer mensaje
         msg = messages[0] or {}
+
+        # 1) Número del remitente (primero, para poder guardarlo)
+        numero_raw = msg.get('from') or msg.get('wa_id') or ""
+        numero_completo = limpiar_numero(numero_raw)
+
+        # 2) ID del mensaje
         message_id = (msg.get("id") or "").strip()
+
+        # 3) Control de duplicados + guardado
         if message_id:
             ya = WhatsappMensajeProcesado.query.filter_by(message_id=message_id).first()
             if ya:
@@ -318,10 +326,6 @@ def whatsapp_webhook():
             ))
             db.session.commit()
 
-
-        # Número del remitente (MSISDN, a veces sin '+')
-        numero_raw = msg.get('from') or msg.get('wa_id') or ""
-        numero_completo = limpiar_numero(numero_raw)
 
         # Texto del mensaje (puede venir en diferentes campos)
         texto = ""
@@ -764,64 +768,78 @@ def api_recintos():
 
 @app.route("/api/candidatos")
 def api_candidatos():
-    id_municipio = request.args.get("id_municipio")
+    id_municipio = (request.args.get("id_municipio") or "").strip()
+    dep_sel = request.args.get("departamento") or ""
+    prov_sel = request.args.get("provincia") or ""
 
     if not id_municipio:
         return jsonify([])
 
-    # 1️⃣ BUSCAR el municipio real en RecintosParaPrimaria.csv
-    archivo_recintos = os.path.join(
-        os.path.dirname(__file__),
-        "privado",
-        "RecintosParaPrimaria.csv"
-    )
+    # Normalizamos lo que vino del frontend
+    dep_sel_n = _norm_text(dep_sel)
+    prov_sel_n = _norm_text(prov_sel)
 
-    departamento = None
-    provincia = None
-    municipio = None
+    # 1) Buscar el municipio REAL en RecintosParaPrimaria.csv
+    archivo_recintos = os.path.join(os.path.dirname(__file__), "privado", "RecintosParaPrimaria.csv")
 
-    with open(archivo_recintos, encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for fila in reader:
-            if fila["id_municipio"] == id_municipio:
-                departamento = fila["nombre_departamento"].strip().lower()
-                provincia = fila["nombre_provincia"].strip().lower()
-                municipio = fila["nombre_municipio"].strip().lower()
-                break
+    dep_real = ""
+    prov_real = ""
+    mun_real = ""
 
-    # Si no se encontró el municipio
-    if not municipio:
+    try:
+        with open(archivo_recintos, encoding="utf-8-sig", newline="") as f:
+            reader = csv.DictReader(f)
+            for fila in reader:
+                # normalizamos datos del CSV
+                idm = (fila.get("id_municipio") or "").strip()
+                dep = _norm_text(fila.get("nombre_departamento"))
+                prov = _norm_text(fila.get("nombre_provincia"))
+                mun = _norm_text(fila.get("nombre_municipio"))
+
+                # coincidencia fuerte: id_municipio + dep + prov
+                if idm == id_municipio and dep == dep_sel_n and prov == prov_sel_n:
+                    dep_real = dep
+                    prov_real = prov
+                    mun_real = mun
+                    break
+
+    except Exception as e:
+        print("❌ Error leyendo RecintosParaPrimaria.csv:", str(e))
         return jsonify([])
 
-    # 2️⃣ BUSCAR candidatos por departamento + provincia + municipio
-    archivo_candidatos = os.path.join(
-        os.path.dirname(__file__),
-        "privado",
-        "CandidatosPorMunicipio.csv"
-    )
+    # Si no encontramos combinación exacta, devolvemos vacío (mejor que dar mal)
+    if not mun_real:
+        print("⚠️ No se encontró municipio con esa combinación:", id_municipio, dep_sel, prov_sel)
+        return jsonify([])
 
+    # 2) Buscar candidatos por dep + prov + mun en CandidatosPorMunicipio.csv
+    archivo_candidatos = os.path.join(os.path.dirname(__file__), "privado", "CandidatosPorMunicipio.csv")
     candidatos = []
 
-    with open(archivo_candidatos, encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for fila in reader:
-            if (
-                fila["departamento"].strip().lower() == departamento and
-                fila["provincia"].strip().lower() == provincia and
-                fila["municipio"].strip().lower() == municipio and
-                fila["cargo"].strip().lower() == "alcalde"
-            ):
-                candidatos.append({
-                    "id_nombre_completo": fila["id_nombre_completo"],
-                    "nombre_completo": fila["nombre_completo"],
-                    "organizacion_politica": fila["organizacion_politica"],
-                    "id_organizacion_politica": fila["id_organizacion_politica"],
-                    "id_cargo": fila["id_cargo"],
-                    "cargo": fila["cargo"]
-                })
+    try:
+        with open(archivo_candidatos, encoding="utf-8-sig", newline="") as f:
+            reader = csv.DictReader(f)
+            for fila in reader:
+                dep_c = _norm_text(fila.get("departamento"))
+                prov_c = _norm_text(fila.get("provincia"))
+                mun_c = _norm_text(fila.get("municipio"))
+                cargo_c = _norm_text(fila.get("cargo"))
+
+                if dep_c == dep_real and prov_c == prov_real and mun_c == mun_real and cargo_c == "ALCALDE":
+                    candidatos.append({
+                        "id_nombre_completo": (fila.get("id_nombre_completo") or "").strip(),
+                        "nombre_completo": (fila.get("nombre_completo") or "").strip(),
+                        "organizacion_politica": (fila.get("organizacion_politica") or "").strip(),
+                        "id_organizacion_politica": (fila.get("id_organizacion_politica") or "").strip(),
+                        "id_cargo": (fila.get("id_cargo") or "").strip(),
+                        "cargo": (fila.get("cargo") or "").strip()
+                    })
+
+    except Exception as e:
+        print("❌ Error leyendo CandidatosPorMunicipio.csv:", str(e))
+        return jsonify([])
 
     return jsonify(candidatos)
-
 
 # ---------------------------
 # Página de preguntas frecuentes
