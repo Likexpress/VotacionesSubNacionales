@@ -28,6 +28,15 @@ from flask import request, jsonify
 
 CANDIDATOS_CSV_PATH = os.path.join(os.path.dirname(__file__), "privado", "CandidatosPorMunicipio.csv")
 
+# Cache en memoria para no releer el CSV en cada request
+_CANDIDATOS_CACHE = {
+    "by_id_municipio": {},   # { "123": [ {candidato...}, ... ] }
+    "id_by_municipio": {},   # { "TARVITA": ["10","11"] }  (ojo: puede haber duplicados)
+    "loaded": False,
+    "error": None
+}
+
+
 def _norm_text(s: str) -> str:
     if s is None:
         return ""
@@ -185,6 +194,9 @@ migrate = Migrate(app, db)
 # ---------------------------
 # Cargar candidatos (1 sola vez)
 # ---------------------------
+asegurar_candidatos_cargados()
+print("✅ CANDIDATOS loaded:", _CANDIDATOS_CACHE["loaded"])
+print("⚠️ CANDIDATOS error:", _CANDIDATOS_CACHE["error"])
 print("📌 CANDIDATOS path:", CANDIDATOS_CSV_PATH)
 
 
@@ -254,103 +266,6 @@ with app.app_context():
 
 
         
-RECINTOS_CSV_PATH = os.path.join(os.path.dirname(__file__), "privado", "RecintosParaPrimaria.csv")
-
-# Cache para resolver municipio real desde Recintos
-_RECINTOS_INDEX = {
-    "by_key": {},   # {(id_mun, DEP, PROV): MUN}
-    "loaded": False,
-    "error": None
-}
-
-# Cache para candidatos por DEP+PROV+MUN (solo alcaldes)
-_CANDIDATOS_INDEX = {
-    "by_dpm": {},   # {(DEP, PROV, MUN): [candidatos...]}
-    "loaded": False,
-    "error": None
-}
-
-def cargar_recintos_index():
-    _RECINTOS_INDEX["by_key"] = {}
-    _RECINTOS_INDEX["loaded"] = False
-    _RECINTOS_INDEX["error"] = None
-
-    if not os.path.exists(RECINTOS_CSV_PATH):
-        _RECINTOS_INDEX["error"] = f"No existe el archivo: {RECINTOS_CSV_PATH}"
-        return
-
-    try:
-        with open(RECINTOS_CSV_PATH, encoding="utf-8-sig", newline="") as f:
-            reader = csv.DictReader(f)
-            for fila in reader:
-                idm = (fila.get("id_municipio") or "").strip()
-                dep = _norm_text(fila.get("nombre_departamento"))
-                prov = _norm_text(fila.get("nombre_provincia"))
-                mun = _norm_text(fila.get("nombre_municipio"))
-
-                if not (idm and dep and prov and mun):
-                    continue
-
-                # Guarda el municipio real para esa combinación
-                _RECINTOS_INDEX["by_key"][(idm, dep, prov)] = mun
-
-        _RECINTOS_INDEX["loaded"] = True
-
-    except Exception as e:
-        _RECINTOS_INDEX["error"] = f"Error leyendo RecintosParaPrimaria.csv: {str(e)}"
-
-
-def cargar_candidatos_index_por_dpm():
-    _CANDIDATOS_INDEX["by_dpm"] = {}
-    _CANDIDATOS_INDEX["loaded"] = False
-    _CANDIDATOS_INDEX["error"] = None
-
-    if not os.path.exists(CANDIDATOS_CSV_PATH):
-        _CANDIDATOS_INDEX["error"] = f"No existe el archivo: {CANDIDATOS_CSV_PATH}"
-        return
-
-    try:
-        with open(CANDIDATOS_CSV_PATH, encoding="utf-8-sig", newline="") as f:
-            reader = csv.DictReader(f)
-            for fila in reader:
-                dep = _norm_text(fila.get("departamento"))
-                prov = _norm_text(fila.get("provincia"))
-                mun = _norm_text(fila.get("municipio"))
-                cargo = _norm_text(fila.get("cargo"))
-
-                if not (dep and prov and mun and cargo):
-                    continue
-
-                # Solo alcaldes
-                if "ALCALDE" not in cargo:
-                    continue
-
-
-                key = (dep, prov, mun)
-                _CANDIDATOS_INDEX["by_dpm"].setdefault(key, []).append({
-                    "id_nombre_completo": (fila.get("id_nombre_completo") or "").strip(),
-                    "nombre_completo": (fila.get("nombre_completo") or "").strip(),
-                    "organizacion_politica": (fila.get("organizacion_politica") or "").strip(),
-                    "id_organizacion_politica": (fila.get("id_organizacion_politica") or "").strip(),
-                    "id_cargo": (fila.get("id_cargo") or "").strip(),
-                    "cargo": (fila.get("cargo") or "").strip(),
-                })
-
-        # Ordena una vez por nombre
-        for k in _CANDIDATOS_INDEX["by_dpm"]:
-            _CANDIDATOS_INDEX["by_dpm"][k].sort(key=lambda x: (x.get("nombre_completo") or "").lower())
-
-        _CANDIDATOS_INDEX["loaded"] = True
-
-    except Exception as e:
-        _CANDIDATOS_INDEX["error"] = f"Error leyendo CandidatosPorMunicipio.csv: {str(e)}"
-
-
-def asegurar_indexes_cargados():
-    if not _RECINTOS_INDEX["loaded"] and _RECINTOS_INDEX["error"] is None:
-        cargar_recintos_index()
-    if not _CANDIDATOS_INDEX["loaded"] and _CANDIDATOS_INDEX["error"] is None:
-        cargar_candidatos_index_por_dpm()
 
 
 # ---------------------------
@@ -390,15 +305,7 @@ def whatsapp_webhook():
 
         # Tomamos el primer mensaje
         msg = messages[0] or {}
-
-        # 1) Número del remitente (primero, para poder guardarlo)
-        numero_raw = msg.get('from') or msg.get('wa_id') or ""
-        numero_completo = limpiar_numero(numero_raw)
-
-        # 2) ID del mensaje
         message_id = (msg.get("id") or "").strip()
-
-        # 3) Control de duplicados + guardado
         if message_id:
             ya = WhatsappMensajeProcesado.query.filter_by(message_id=message_id).first()
             if ya:
@@ -411,6 +318,10 @@ def whatsapp_webhook():
             ))
             db.session.commit()
 
+
+        # Número del remitente (MSISDN, a veces sin '+')
+        numero_raw = msg.get('from') or msg.get('wa_id') or ""
+        numero_completo = limpiar_numero(numero_raw)
 
         # Texto del mensaje (puede venir en diferentes campos)
         texto = ""
@@ -853,39 +764,63 @@ def api_recintos():
 
 @app.route("/api/candidatos")
 def api_candidatos():
-    id_municipio = (request.args.get("id_municipio") or "").strip()
-    dep_sel = request.args.get("departamento") or ""
-    prov_sel = request.args.get("provincia") or ""
+    id_municipio = request.args.get("id_municipio")
 
-    if not (id_municipio and dep_sel and prov_sel):
+    if not id_municipio:
         return jsonify([])
 
-    dep_n = _norm_text(dep_sel)
-    prov_n = _norm_text(prov_sel)
+    # 1️⃣ BUSCAR el municipio real en RecintosParaPrimaria.csv
+    archivo_recintos = os.path.join(
+        os.path.dirname(__file__),
+        "privado",
+        "RecintosParaPrimaria.csv"
+    )
 
-    asegurar_indexes_cargados()
+    departamento = None
+    provincia = None
+    municipio = None
 
-    if _RECINTOS_INDEX["error"]:
-        print("Error recintos:", _RECINTOS_INDEX["error"])
+    with open(archivo_recintos, encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for fila in reader:
+            if fila["id_municipio"] == id_municipio:
+                departamento = fila["nombre_departamento"].strip().lower()
+                provincia = fila["nombre_provincia"].strip().lower()
+                municipio = fila["nombre_municipio"].strip().lower()
+                break
+
+    # Si no se encontró el municipio
+    if not municipio:
         return jsonify([])
 
-    if _CANDIDATOS_INDEX["error"]:
-        print("Error candidatos:", _CANDIDATOS_INDEX["error"])
-        return jsonify([])
+    # 2️⃣ BUSCAR candidatos por departamento + provincia + municipio
+    archivo_candidatos = os.path.join(
+        os.path.dirname(__file__),
+        "privado",
+        "CandidatosPorMunicipio.csv"
+    )
 
-    mun_real = _RECINTOS_INDEX["by_key"].get((id_municipio, dep_n, prov_n))
-    if not mun_real:
-        print("No se encontró municipio real para:", id_municipio, dep_sel, prov_sel)
-        return jsonify([])
+    candidatos = []
 
-    key = (dep_n, prov_n, mun_real)
-    candidatos = _CANDIDATOS_INDEX["by_dpm"].get(key, [])
-
-    # (opcional) log para depurar
-    print("KEY candidatos:", key, "TOTAL:", len(candidatos))
+    with open(archivo_candidatos, encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for fila in reader:
+            if (
+                fila["departamento"].strip().lower() == departamento and
+                fila["provincia"].strip().lower() == provincia and
+                fila["municipio"].strip().lower() == municipio and
+                fila["cargo"].strip().lower() == "alcalde"
+            ):
+                candidatos.append({
+                    "id_nombre_completo": fila["id_nombre_completo"],
+                    "nombre_completo": fila["nombre_completo"],
+                    "organizacion_politica": fila["organizacion_politica"],
+                    "id_organizacion_politica": fila["id_organizacion_politica"],
+                    "id_cargo": fila["id_cargo"],
+                    "cargo": fila["cargo"]
+                })
 
     return jsonify(candidatos)
-
 
 
 # ---------------------------
