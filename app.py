@@ -266,6 +266,102 @@ with app.app_context():
 
 
         
+RECINTOS_CSV_PATH = os.path.join(os.path.dirname(__file__), "privado", "RecintosParaPrimaria.csv")
+
+# Cache para resolver municipio real desde Recintos
+_RECINTOS_INDEX = {
+    "by_key": {},   # {(id_mun, DEP, PROV): MUN}
+    "loaded": False,
+    "error": None
+}
+
+# Cache para candidatos por DEP+PROV+MUN (solo alcaldes)
+_CANDIDATOS_INDEX = {
+    "by_dpm": {},   # {(DEP, PROV, MUN): [candidatos...]}
+    "loaded": False,
+    "error": None
+}
+
+def cargar_recintos_index():
+    _RECINTOS_INDEX["by_key"] = {}
+    _RECINTOS_INDEX["loaded"] = False
+    _RECINTOS_INDEX["error"] = None
+
+    if not os.path.exists(RECINTOS_CSV_PATH):
+        _RECINTOS_INDEX["error"] = f"No existe el archivo: {RECINTOS_CSV_PATH}"
+        return
+
+    try:
+        with open(RECINTOS_CSV_PATH, encoding="utf-8-sig", newline="") as f:
+            reader = csv.DictReader(f)
+            for fila in reader:
+                idm = (fila.get("id_municipio") or "").strip()
+                dep = _norm_text(fila.get("nombre_departamento"))
+                prov = _norm_text(fila.get("nombre_provincia"))
+                mun = _norm_text(fila.get("nombre_municipio"))
+
+                if not (idm and dep and prov and mun):
+                    continue
+
+                # Guarda el municipio real para esa combinación
+                _RECINTOS_INDEX["by_key"][(idm, dep, prov)] = mun
+
+        _RECINTOS_INDEX["loaded"] = True
+
+    except Exception as e:
+        _RECINTOS_INDEX["error"] = f"Error leyendo RecintosParaPrimaria.csv: {str(e)}"
+
+
+def cargar_candidatos_index_por_dpm():
+    _CANDIDATOS_INDEX["by_dpm"] = {}
+    _CANDIDATOS_INDEX["loaded"] = False
+    _CANDIDATOS_INDEX["error"] = None
+
+    if not os.path.exists(CANDIDATOS_CSV_PATH):
+        _CANDIDATOS_INDEX["error"] = f"No existe el archivo: {CANDIDATOS_CSV_PATH}"
+        return
+
+    try:
+        with open(CANDIDATOS_CSV_PATH, encoding="utf-8-sig", newline="") as f:
+            reader = csv.DictReader(f)
+            for fila in reader:
+                dep = _norm_text(fila.get("departamento"))
+                prov = _norm_text(fila.get("provincia"))
+                mun = _norm_text(fila.get("municipio"))
+                cargo = _norm_text(fila.get("cargo"))
+
+                if not (dep and prov and mun and cargo):
+                    continue
+
+                # Solo alcaldes
+                if cargo != "ALCALDE":
+                    continue
+
+                key = (dep, prov, mun)
+                _CANDIDATOS_INDEX["by_dpm"].setdefault(key, []).append({
+                    "id_nombre_completo": (fila.get("id_nombre_completo") or "").strip(),
+                    "nombre_completo": (fila.get("nombre_completo") or "").strip(),
+                    "organizacion_politica": (fila.get("organizacion_politica") or "").strip(),
+                    "id_organizacion_politica": (fila.get("id_organizacion_politica") or "").strip(),
+                    "id_cargo": (fila.get("id_cargo") or "").strip(),
+                    "cargo": (fila.get("cargo") or "").strip(),
+                })
+
+        # Ordena una vez por nombre
+        for k in _CANDIDATOS_INDEX["by_dpm"]:
+            _CANDIDATOS_INDEX["by_dpm"][k].sort(key=lambda x: (x.get("nombre_completo") or "").lower())
+
+        _CANDIDATOS_INDEX["loaded"] = True
+
+    except Exception as e:
+        _CANDIDATOS_INDEX["error"] = f"Error leyendo CandidatosPorMunicipio.csv: {str(e)}"
+
+
+def asegurar_indexes_cargados():
+    if not _RECINTOS_INDEX["loaded"] and _RECINTOS_INDEX["error"] is None:
+        cargar_recintos_index()
+    if not _CANDIDATOS_INDEX["loaded"] and _CANDIDATOS_INDEX["error"] is None:
+        cargar_candidatos_index_por_dpm()
 
 
 # ---------------------------
@@ -768,44 +864,40 @@ def api_recintos():
 
 @app.route("/api/candidatos")
 def api_candidatos():
+    # 1) Leer lo que viene del formulario
     id_municipio = (request.args.get("id_municipio") or "").strip()
     dep_sel = request.args.get("departamento") or ""
     prov_sel = request.args.get("provincia") or ""
 
-    if not id_municipio:
+    # Si falta algo, no devolvemos nada
+    if not (id_municipio and dep_sel and prov_sel):
         return jsonify([])
 
-    # Normalizamos lo que vino del frontend
-    dep_sel_n = _norm_text(dep_sel)
-    prov_sel_n = _norm_text(prov_sel)
+    # 2) Normalizar (quita tildes, mayúsculas, espacios)
+    dep_n = _norm_text(dep_sel)
+    prov_n = _norm_text(prov_sel)
 
-    # 1) Buscar el municipio REAL en RecintosParaPrimaria.csv
-    archivo_recintos = os.path.join(os.path.dirname(__file__), "privado", "RecintosParaPrimaria.csv")
+    # 3) Cargar caches (solo la primera vez)
+    asegurar_indexes_cargados()
 
-    dep_real = ""
-    prov_real = ""
-    mun_real = ""
-
-    try:
-        with open(archivo_recintos, encoding="utf-8-sig", newline="") as f:
-            reader = csv.DictReader(f)
-            for fila in reader:
-                # normalizamos datos del CSV
-                idm = (fila.get("id_municipio") or "").strip()
-                dep = _norm_text(fila.get("nombre_departamento"))
-                prov = _norm_text(fila.get("nombre_provincia"))
-                mun = _norm_text(fila.get("nombre_municipio"))
-
-                # coincidencia fuerte: id_municipio + dep + prov
-                if idm == id_municipio and dep == dep_sel_n and prov == prov_sel_n:
-                    dep_real = dep
-                    prov_real = prov
-                    mun_real = mun
-                    break
-
-    except Exception as e:
-        print("❌ Error leyendo RecintosParaPrimaria.csv:", str(e))
+    # Si hubo errores cargando archivos, devolvemos vacío
+    if _RECINTOS_INDEX["error"]:
+        print("❌ Error recintos:", _RECINTOS_INDEX["error"])
         return jsonify([])
+    if _CANDIDATOS_INDEX["error"]:
+        print("❌ Error candidatos:", _CANDIDATOS_INDEX["error"])
+        return jsonify([])
+
+    # 4) Convertir id_municipio + dep + prov en el NOMBRE real del municipio
+    mun_real = _RECINTOS_INDEX["by_key"].get((id_municipio, dep_n, prov_n))
+    if not mun_real:
+        print("⚠️ No se encontró municipio real para:", id_municipio, dep_sel, prov_sel)
+        return jsonify([])
+
+    # 5) Con dep + prov + municipio real, buscamos los alcaldes correctos
+    candidatos = _CANDIDATOS_INDEX["by_dpm"].get((dep_n, prov_n, mun_real), [])
+    return jsonify(candidatos)
+
 
     # Si no encontramos combinación exacta, devolvemos vacío (mejor que dar mal)
     if not mun_real:
