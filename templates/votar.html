@@ -127,7 +127,10 @@
         </div>
         <div class="mb-3">
           <label class="form-label">Municipio</label>
-          <select id="municipio" name="municipio" class="form-select" required></select>
+          <select id="municipio" name="id_municipio" class="form-select" required></select>
+          <input type="hidden" name="municipio_nombre" id="municipio_nombre">
+
+
         </div>
         <div class="mb-3">
           <label class="form-label">Recinto</label>
@@ -170,81 +173,14 @@
           <div class="note">Se vota por el <strong>Presidente</strong>. Se muestra el binomio para referencia.</div>
         </div>
 
-        <div class="candidate-grid" id="candidatos">
-          <!-- PDC -->
-          <label class="candidate-card" for="cand-pdc">
-            <input class="form-check-input candidate-radio" type="radio" id="cand-pdc"
-                  name="candidato" value="Rodrigo Paz Pereyra" required>
-            <div class="party pdc">PDC</div>
-            <div class="pres">Rodrigo Paz Pereyra <small>(Presidente)</small></div>
-            <p class="vice">Edman Lara <small>(Vicepresidente)</small></p>
-          </label>
+        <div class="section-title">Candidato a Alcalde</div>
 
-          <!-- LIBRE -->
-          <label class="candidate-card" for="cand-libre">
-            <input class="form-check-input candidate-radio" type="radio" id="cand-libre"
-                  name="candidato" value="Jorge Tuto Quiroga" required>
-            <div class="party libre">LIBRE</div>
-            <div class="pres">Jorge “Tuto” Quiroga <small>(Presidente)</small></div>
-            <p class="vice">Juan Pablo Velasco <small>(Vicepresidente)</small></p>
-          </label>
-
-          <!-- Voto en blanco -->
-          <label class="candidate-card" for="cand-blanco">
-            <input class="form-check-input candidate-radio" type="radio" id="cand-blanco"
-                  name="candidato" value="Voto en blanco" required>
-            <div class="party blanco">VOTO EN BLANCO</div>
-            <div class="pres">No marcaré ninguna candidatura</div>
-            <p class="vice">Boleta válida sin preferencia</p>
-          </label>
-
-          <!-- Voto nulo -->
-          <label class="candidate-card" for="cand-nulo">
-            <input class="form-check-input candidate-radio" type="radio" id="cand-nulo"
-                  name="candidato" value="Voto nulo" required>
-            <div class="party nulo">VOTO NULO</div>
-            <div class="pres">Anularé mi voto</div>
-            <p class="vice">Boleta inválida voluntariamente</p>
-          </label>
-
-          <!-- No sabe aún -->
-          <label class="candidate-card" for="cand-indeciso">
-            <input class="form-check-input candidate-radio" type="radio" id="cand-indeciso"
-                  name="candidato" value="Aún no lo decidí" required>
-            <div class="party indeciso">INDECISO/A</div>
-            <div class="pres">Aún no lo decidí</div>
-            <p class="vice">Necesito más información</p>
-          </label>
-
-          <!-- No va a votar -->
-          <label class="candidate-card" for="cand-novota">
-            <input class="form-check-input candidate-radio" type="radio" id="cand-novota"
-                  name="candidato" value="No votaré" required>
-            <div class="party novota">NO VOTARÉ</div>
-            <div class="pres">No asistiré a votar</div>
-            <p class="vice">Me ausentaré en esta elección</p>
-          </label>
-        </div>
-
-        <!-- === JS mínimo para resaltar selección === -->
-        <script>
-          (function () {
-            const grid = document.getElementById('candidatos');
-            function paint() {
-              grid.querySelectorAll('.candidate-card').forEach(card => {
-                const r = card.querySelector('input[type="radio"]');
-                card.classList.toggle('selected', r.checked);
-              });
-            }
-            grid.addEventListener('change', paint);
-            paint();
-          })();
-        </script>
-
-
-
-
-
+<div class="mb-3">
+  <label class="form-label">Selecciona tu candidato</label>
+  <select id="candidato" name="candidato" class="form-select" required>
+    <option value="">Selecciona un municipio primero</option>
+  </select>
+</div>
 
 
 
@@ -271,114 +207,215 @@
     </div>
   </div>
 
-  <script>
-    let recintosData = [];
+<script>
+  let recintosData = [];
 
-    async function cargarDatos() {
-      const res = await fetch("/api/recintos");
-      recintosData = await res.json();
+  async function cargarDatos() {
+    const res = await fetch("/api/recintos");
+    recintosData = await res.json();
 
-      const paises = [...new Set(recintosData.map(r => r.nombre_pais))];
-      paises.forEach(p => $('#pais').append(new Option(p, p)));
-      $('#pais').val('Bolivia').trigger('change');
+    const paises = [...new Set(recintosData.map(r => r.nombre_pais))];
+    const $pais = $('#pais');
+    $pais.empty().append(new Option('Selecciona país', ''));
+
+    paises.forEach(p => $pais.append(new Option(p, p)));
+
+    // Default Bolivia si existe
+    if (paises.includes('Bolivia')) {
+      $pais.val('Bolivia').trigger('change');
     }
+  }
 
-    function actualizarDepartamentos() {
-      const pais = $('#pais').val();
-      const departamentos = [...new Set(recintosData.filter(r => r.nombre_pais === pais).map(r => r.nombre_departamento))];
-      const select = $('#departamento');
-      select.empty().append(new Option('Selecciona departamento', ''));
-      departamentos.forEach(dep => select.append(new Option(dep, dep)));
-      select.trigger('change');
-    }
+  function actualizarDepartamentos() {
+    const pais = $('#pais').val();
 
-    function actualizarProvincias() {
-      const pais = $('#pais').val();
-      const departamento = $('#departamento').val();
-      const provincias = [...new Set(recintosData.filter(r =>
-        r.nombre_pais === pais && r.nombre_departamento === departamento).map(r => r.nombre_provincia))];
-      const select = $('#provincia');
-      select.empty().append(new Option('Selecciona provincia', ''));
-      provincias.forEach(prov => select.append(new Option(prov, prov)));
-      select.trigger('change');
-    }
+    const departamentos = [...new Set(
+      recintosData
+        .filter(r => r.nombre_pais === pais)
+        .map(r => r.nombre_departamento)
+    )];
 
-    function actualizarMunicipios() {
-      const pais = $('#pais').val();
-      const departamento = $('#departamento').val();
-      const provincia = $('#provincia').val();
-      const municipios = [...new Set(recintosData.filter(r =>
-        r.nombre_pais === pais &&
-        r.nombre_departamento === departamento &&
-        r.nombre_provincia === provincia
-      ).map(r => r.nombre_municipio))];
-      const select = $('#municipio');
-      select.empty().append(new Option('Selecciona municipio', ''));
-      municipios.forEach(m => select.append(new Option(m, m)));
-      select.trigger('change');
-    }
+    const $dep = $('#departamento');
+    $dep.empty().append(new Option('Selecciona departamento', ''));
+    departamentos.forEach(dep => $dep.append(new Option(dep, dep)));
+    $dep.trigger('change');
+  }
 
-    function actualizarRecintos() {
-      const pais = $('#pais').val();
-      const departamento = $('#departamento').val();
-      const provincia = $('#provincia').val();
-      const municipio = $('#municipio').val();
-      const recintos = [...new Set(recintosData.filter(r =>
-        r.nombre_pais === pais &&
-        r.nombre_departamento === departamento &&
-        r.nombre_provincia === provincia &&
-        r.nombre_municipio === municipio
-      ).map(r => r.nombre_recinto))];
-      const select = $('#recinto');
-      select.empty().append(new Option('Selecciona recinto', ''));
-      recintos.forEach(r => select.append(new Option(r, r)));
-      select.trigger('change');
-    }
+  function actualizarProvincias() {
+    const pais = $('#pais').val();
+    const departamento = $('#departamento').val();
 
-    function mostrarCampoCI(select) {
-      const ciDiv = document.getElementById('campo_ci');
-      const ciInput = document.getElementById('ci');
-      if (select.value === 'Sí') {
-        ciDiv.classList.remove('hidden');
-        ciInput.required = true;
-      } else {
-        ciDiv.classList.add('hidden');
-        ciInput.required = false;
+    const provincias = [...new Set(
+      recintosData
+        .filter(r => r.nombre_pais === pais && r.nombre_departamento === departamento)
+        .map(r => r.nombre_provincia)
+    )];
+
+    const $prov = $('#provincia');
+    $prov.empty().append(new Option('Selecciona provincia', ''));
+    provincias.forEach(prov => $prov.append(new Option(prov, prov)));
+    $prov.trigger('change');
+  }
+
+  function actualizarMunicipios() {
+    const pais = $('#pais').val();
+    const departamento = $('#departamento').val();
+    const provincia = $('#provincia').val();
+
+    const filas = recintosData.filter(r =>
+      r.nombre_pais === pais &&
+      r.nombre_departamento === departamento &&
+      r.nombre_provincia === provincia
+    );
+
+    // id_municipio -> nombre_municipio (únicos)
+    const mapa = new Map();
+    filas.forEach(r => {
+      if (r.id_municipio && r.nombre_municipio && !mapa.has(String(r.id_municipio))) {
+        mapa.set(String(r.id_municipio), r.nombre_municipio);
       }
-    }
-    $(document).ready(() => {
-      cargarDatos();
-      $('#pais').select2().on('change', actualizarDepartamentos);
-      $('#departamento').select2().on('change', actualizarProvincias);
-      $('#provincia').select2().on('change', actualizarMunicipios);
-      $('#municipio').select2().on('change', actualizarRecintos);
-      $('#recinto').select2();
     });
 
-    // Geolocalización al cargar
-    window.onload = function () {
-      if (navigator.geolocation) {
-        navigator.geolocation.getCurrentPosition(
-          function (pos) {
-            document.getElementById('latitud').value = pos.coords.latitude;
-            document.getElementById('longitud').value = pos.coords.longitude;
-          },
-          function (error) {
-            console.warn("No se pudo obtener la ubicación: " + error.message);
-          },
-          { timeout: 10000 }
-        );
-      } else {
-        console.warn("Geolocalización no soportada.");
-      }
-    };
+    const $mun = $('#municipio');
+    $mun.empty().append(new Option('Selecciona municipio', ''));
 
-    // Evitar múltiples envíos del formulario
-    document.querySelector('form').addEventListener('submit', function (e) {
-      const boton = this.querySelector('button[type="submit"]');
-      boton.disabled = true;
-      boton.innerText = 'Enviando...';
+    for (const [id, nombre] of mapa.entries()) {
+      $mun.append(new Option(nombre, id)); // VALUE = id_municipio
+    }
+
+    $mun.trigger('change');
+    setMunicipioNombreHidden();
+
+  }
+  function setMunicipioNombreHidden() {
+    const select = document.getElementById('municipio');
+    const hidden = document.getElementById('municipio_nombre');
+
+    if (!select || !hidden) return;
+
+    const selectedOption = select.options[select.selectedIndex];
+    hidden.value = selectedOption ? selectedOption.text : '';
+  }
+
+  function actualizarRecintos() {
+    const pais = $('#pais').val();
+    const departamento = $('#departamento').val();
+    const provincia = $('#provincia').val();
+    const id_municipio = $('#municipio').val();
+
+    const recintos = [...new Set(
+      recintosData
+        .filter(r =>
+          r.nombre_pais === pais &&
+          r.nombre_departamento === departamento &&
+          r.nombre_provincia === provincia &&
+          String(r.id_municipio) === String(id_municipio)
+        )
+        .map(r => r.nombre_recinto)
+    )];
+
+    const $rec = $('#recinto');
+    $rec.empty().append(new Option('Selecciona recinto', ''));
+    recintos.forEach(r => $rec.append(new Option(r, r)));
+    $rec.trigger('change');
+  }
+
+  async function cargarCandidatosPorMunicipio() {
+    const id_municipio = $('#municipio').val();
+    const $cand = $('#candidato');
+
+    $cand.empty();
+
+    if (!id_municipio) {
+      $cand.append(new Option('Selecciona un municipio primero', ''));
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/candidatos?id_municipio=${encodeURIComponent(id_municipio)}`);
+      const data = await res.json();
+
+      $cand.append(new Option('Selecciona tu candidato', ''));
+
+      if (!Array.isArray(data) || data.length === 0) {
+        $cand.append(new Option('No hay candidatos para este municipio', ''));
+        return;
+      }
+
+      data.forEach(c => {
+        // Value recomendado: id_nombre_completo (así guardas un ID real)
+        const value = c.id_nombre_completo || c.nombre_completo;
+        const label = `${c.nombre_completo} — ${c.organizacion_politica}`;
+        $cand.append(new Option(label, value));
+      });
+
+    } catch (e) {
+      console.error(e);
+      $cand.append(new Option('Error cargando candidatos', ''));
+    }
+  }
+
+  function mostrarCampoCI(select) {
+    const ciDiv = document.getElementById('campo_ci');
+    const ciInput = document.getElementById('ci');
+    if (select.value === 'Sí') {
+      ciDiv.classList.remove('hidden');
+      ciInput.required = true;
+    } else {
+      ciDiv.classList.add('hidden');
+      ciInput.required = false;
+    }
+  }
+
+  $(document).ready(async () => {
+    // Select2
+    $('#pais').select2();
+    $('#departamento').select2();
+    $('#provincia').select2();
+    $('#municipio').select2();
+    $('#recinto').select2();
+    $('#candidato').select2();
+
+    // Eventos encadenados
+    $('#pais').on('change', actualizarDepartamentos);
+    $('#departamento').on('change', actualizarProvincias);
+    $('#provincia').on('change', actualizarMunicipios);
+
+    $('#municipio').on('change', () => {
+      setMunicipioNombreHidden();
+      actualizarRecintos();
+      cargarCandidatosPorMunicipio();
     });
-  </script>
+
+
+
+    await cargarDatos();
+  });
+
+  // Geolocalización al cargar
+  window.onload = function () {
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        function (pos) {
+          document.getElementById('latitud').value = pos.coords.latitude;
+          document.getElementById('longitud').value = pos.coords.longitude;
+        },
+        function (error) {
+          console.warn("No se pudo obtener la ubicación: " + error.message);
+        },
+        { timeout: 10000 }
+      );
+    } else {
+      console.warn("Geolocalización no soportada.");
+    }
+  };
+
+  // Evitar múltiples envíos del formulario
+  document.querySelector('form').addEventListener('submit', function () {
+    const boton = this.querySelector('button[type="submit"]');
+    boton.disabled = true;
+    boton.innerText = 'Enviando...';
+  });
+</script>
 </body>
 </html>
