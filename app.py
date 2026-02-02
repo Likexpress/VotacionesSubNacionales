@@ -23,19 +23,10 @@ from flask import request, jsonify
 
 
 # ---------------------------
-# Loader de Candidatos por Municipio (CSV) 1
+# Loader de Candidatos por Municipio (CSV)
 # ---------------------------
 
 CANDIDATOS_CSV_PATH = os.path.join(os.path.dirname(__file__), "privado", "CandidatosPorMunicipio.csv")
-
-# Cache en memoria para no releer el CSV en cada request
-_CANDIDATOS_CACHE = {
-    "by_id_municipio": {},   # { "123": [ {candidato...}, ... ] }
-    "id_by_municipio": {},   # { "TARVITA": ["10","11"] }  (ojo: puede haber duplicados)
-    "loaded": False,
-    "error": None
-}
-
 
 def _norm_text(s: str) -> str:
     if s is None:
@@ -194,9 +185,6 @@ migrate = Migrate(app, db)
 # ---------------------------
 # Cargar candidatos (1 sola vez)
 # ---------------------------
-asegurar_candidatos_cargados()
-print("✅ CANDIDATOS loaded:", _CANDIDATOS_CACHE["loaded"])
-print("⚠️ CANDIDATOS error:", _CANDIDATOS_CACHE["error"])
 print("📌 CANDIDATOS path:", CANDIDATOS_CSV_PATH)
 
 
@@ -334,8 +322,9 @@ def cargar_candidatos_index_por_dpm():
                     continue
 
                 # Solo alcaldes
-                if cargo != "ALCALDE":
+                if "ALCALDE" not in cargo:
                     continue
+
 
                 key = (dep, prov, mun)
                 _CANDIDATOS_INDEX["by_dpm"].setdefault(key, []).append({
@@ -864,74 +853,40 @@ def api_recintos():
 
 @app.route("/api/candidatos")
 def api_candidatos():
-    # 1) Leer lo que viene del formulario
     id_municipio = (request.args.get("id_municipio") or "").strip()
     dep_sel = request.args.get("departamento") or ""
     prov_sel = request.args.get("provincia") or ""
 
-    # Si falta algo, no devolvemos nada
     if not (id_municipio and dep_sel and prov_sel):
         return jsonify([])
 
-    # 2) Normalizar (quita tildes, mayúsculas, espacios)
     dep_n = _norm_text(dep_sel)
     prov_n = _norm_text(prov_sel)
 
-    # 3) Cargar caches (solo la primera vez)
     asegurar_indexes_cargados()
 
-    # Si hubo errores cargando archivos, devolvemos vacío
     if _RECINTOS_INDEX["error"]:
-        print("❌ Error recintos:", _RECINTOS_INDEX["error"])
-        return jsonify([])
-    if _CANDIDATOS_INDEX["error"]:
-        print("❌ Error candidatos:", _CANDIDATOS_INDEX["error"])
+        print("Error recintos:", _RECINTOS_INDEX["error"])
         return jsonify([])
 
-    # 4) Convertir id_municipio + dep + prov en el NOMBRE real del municipio
+    if _CANDIDATOS_INDEX["error"]:
+        print("Error candidatos:", _CANDIDATOS_INDEX["error"])
+        return jsonify([])
+
     mun_real = _RECINTOS_INDEX["by_key"].get((id_municipio, dep_n, prov_n))
     if not mun_real:
-        print("⚠️ No se encontró municipio real para:", id_municipio, dep_sel, prov_sel)
+        print("No se encontró municipio real para:", id_municipio, dep_sel, prov_sel)
         return jsonify([])
 
-    # 5) Con dep + prov + municipio real, buscamos los alcaldes correctos
-    candidatos = _CANDIDATOS_INDEX["by_dpm"].get((dep_n, prov_n, mun_real), [])
+    key = (dep_n, prov_n, mun_real)
+    candidatos = _CANDIDATOS_INDEX["by_dpm"].get(key, [])
+
+    # (opcional) log para depurar
+    print("KEY candidatos:", key, "TOTAL:", len(candidatos))
+
     return jsonify(candidatos)
 
 
-    # Si no encontramos combinación exacta, devolvemos vacío (mejor que dar mal)
-    if not mun_real:
-        print("⚠️ No se encontró municipio con esa combinación:", id_municipio, dep_sel, prov_sel)
-        return jsonify([])
-
-    # 2) Buscar candidatos por dep + prov + mun en CandidatosPorMunicipio.csv
-    archivo_candidatos = os.path.join(os.path.dirname(__file__), "privado", "CandidatosPorMunicipio.csv")
-    candidatos = []
-
-    try:
-        with open(archivo_candidatos, encoding="utf-8-sig", newline="") as f:
-            reader = csv.DictReader(f)
-            for fila in reader:
-                dep_c = _norm_text(fila.get("departamento"))
-                prov_c = _norm_text(fila.get("provincia"))
-                mun_c = _norm_text(fila.get("municipio"))
-                cargo_c = _norm_text(fila.get("cargo"))
-
-                if dep_c == dep_real and prov_c == prov_real and mun_c == mun_real and cargo_c == "ALCALDE":
-                    candidatos.append({
-                        "id_nombre_completo": (fila.get("id_nombre_completo") or "").strip(),
-                        "nombre_completo": (fila.get("nombre_completo") or "").strip(),
-                        "organizacion_politica": (fila.get("organizacion_politica") or "").strip(),
-                        "id_organizacion_politica": (fila.get("id_organizacion_politica") or "").strip(),
-                        "id_cargo": (fila.get("id_cargo") or "").strip(),
-                        "cargo": (fila.get("cargo") or "").strip()
-                    })
-
-    except Exception as e:
-        print("❌ Error leyendo CandidatosPorMunicipio.csv:", str(e))
-        return jsonify([])
-
-    return jsonify(candidatos)
 
 # ---------------------------
 # Página de preguntas frecuentes
